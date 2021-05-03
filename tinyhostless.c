@@ -36,6 +36,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <signal.h>
+#define __USE_POSIX199309
 #include <time.h>
 #include <unistd.h>
 

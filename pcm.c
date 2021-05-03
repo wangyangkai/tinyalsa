@@ -48,6 +48,8 @@
 
 #include <tinyalsa/asoundlib.h>
 
+#define MAP_FILE	0
+
 #define PARAM_MAX SNDRV_PCM_HW_PARAM_LAST_INTERVAL
 
 /* Logs information into a string; follows snprintf() in that
@@ -336,6 +338,7 @@ unsigned int pcm_frames_to_bytes(struct pcm *pcm, unsigned int frames)
 static int pcm_sync_ptr(struct pcm *pcm, int flags) {
     if (pcm->sync_ptr) {
         pcm->sync_ptr->flags = flags;
+        printf("%s() %d->SNDRV_PCM_IOCTL_SYNC_PTR\n", __FUNCTION__, __LINE__);
         if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_SYNC_PTR, pcm->sync_ptr) < 0)
             return -1;
     }
@@ -347,12 +350,15 @@ static int pcm_hw_mmap_status(struct pcm *pcm) {
     if (pcm->sync_ptr)
         return 0;
 
+    printf("%s() %d->mmap\n", __FUNCTION__, __LINE__);
+
     int page_size = sysconf(_SC_PAGE_SIZE);
     pcm->mmap_status = mmap(NULL, page_size, PROT_READ, MAP_FILE | MAP_SHARED,
                             pcm->fd, SNDRV_PCM_MMAP_OFFSET_STATUS);
     if (pcm->mmap_status == MAP_FAILED)
         pcm->mmap_status = NULL;
     if (!pcm->mmap_status)
+        printf("%s() %d->mmap_error\n", __FUNCTION__, __LINE__);
         goto mmap_error;
 
     pcm->mmap_control = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
@@ -362,6 +368,7 @@ static int pcm_hw_mmap_status(struct pcm *pcm) {
     if (!pcm->mmap_control) {
         munmap(pcm->mmap_status, page_size);
         pcm->mmap_status = NULL;
+        printf("%s() %d->mmap_error\n", __FUNCTION__, __LINE__);
         goto mmap_error;
     }
     if (pcm->flags & PCM_MMAP)
@@ -372,6 +379,8 @@ static int pcm_hw_mmap_status(struct pcm *pcm) {
     return 0;
 
 mmap_error:
+    printf("%s() %d->mmap_error, sizeof(*pcm->sync_ptr):%d \n", __FUNCTION__, __LINE__,
+    	sizeof(*pcm->sync_ptr));
 
     pcm->sync_ptr = calloc(1, sizeof(*pcm->sync_ptr));
     if (!pcm->sync_ptr)
@@ -527,6 +536,8 @@ int pcm_write(struct pcm *pcm, const void *data, unsigned int count)
     x.frames = count / (pcm->config.channels *
                         pcm_format_to_bits(pcm->config.format) / 8);
 
+    printf("%s() snd_xferi.frames:%d\n", __FUNCTION__, x.frames);
+
     for (;;) {
         if (!pcm->running) {
             int prepare_error = pcm_prepare(pcm);
@@ -537,6 +548,7 @@ int pcm_write(struct pcm *pcm, const void *data, unsigned int count)
             pcm->running = 1;
             return 0;
         }
+        printf("%s() ioctl WRITEI_FRAMES, x.frames:%d\n", __FUNCTION__, x.frames);
         if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_WRITEI_FRAMES, &x)) {
             pcm->prepared = 0;
             pcm->running = 0;
@@ -912,6 +924,15 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
         goto fail_close;
     }
     pcm->subdevice = info.subdevice;
+    printf("%s() %d->get %s config\n", __FUNCTION__, __LINE__, fn);
+    printf("config->period_size:%d\n\
+config->period_count:%d\n\
+config->rate:%d\n\
+config->channels:%d\n\n",
+        config->period_size,
+        config->period_count,
+        config->rate,
+        config->channels);
 
     param_init(&params);
     param_set_mask(&params, SNDRV_PCM_HW_PARAM_FORMAT,
@@ -955,7 +976,16 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
     config->period_count = param_get_int(&params, SNDRV_PCM_HW_PARAM_PERIODS);
     pcm->buffer_size = config->period_count * config->period_size;
 
+    printf("%s() %d->set %s param\n", __FUNCTION__, __LINE__, fn);
+    printf("config->period_size:%d\n\
+onfig->period_count:%d\n\
+pcm->buffer_size:%d\n\n",
+        config->period_size,
+        config->period_count,
+        pcm->buffer_size);
+
     if (flags & PCM_MMAP) {
+        printf("%s() %d->mmap\n", __FUNCTION__, __LINE__);
         pcm->mmap_buffer = mmap(NULL, pcm_frames_to_bytes(pcm, pcm->buffer_size),
                                 PROT_READ | PROT_WRITE, MAP_FILE | MAP_SHARED, pcm->fd, 0);
         if (pcm->mmap_buffer == MAP_FAILED) {
@@ -970,25 +1000,38 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
     sparams.period_step = 1;
 
     if (!config->start_threshold) {
-        if (pcm->flags & PCM_IN)
+        if (pcm->flags & PCM_IN) {
             pcm->config.start_threshold = sparams.start_threshold = 1;
-        else
+	        printf("%s %d->pcm->PCM_IN config.start_threshold:%d\n", __FUNCTION__, __LINE__,
+	     	        pcm->config.start_threshold);
+        } else {
             pcm->config.start_threshold = sparams.start_threshold =
                 config->period_count * config->period_size / 2;
+            printf("%s %d->pcm->PCM_OUT config.start_threshold:%d\n", __FUNCTION__, __LINE__,
+                    pcm->config.start_threshold);
+        }
     } else
         sparams.start_threshold = config->start_threshold;
 
     /* pick a high stop threshold - todo: does this need further tuning */
     if (!config->stop_threshold) {
-        if (pcm->flags & PCM_IN)
+        if (pcm->flags & PCM_IN) {
             pcm->config.stop_threshold = sparams.stop_threshold =
                 config->period_count * config->period_size * 10;
-        else
+	        printf("%s() %d->pcm->PCM_IN config.stop_threshold:%d\n", __FUNCTION__, __LINE__,
+	     	       pcm->config.stop_threshold);
+        } else {
             pcm->config.stop_threshold = sparams.stop_threshold =
                 config->period_count * config->period_size;
+	        printf("%s() %d->pcm->PCM_OUT config.stop_threshold:%d\n", __FUNCTION__, __LINE__,
+	     	       pcm->config.stop_threshold);
+        }
     }
-    else
+    else {
         sparams.stop_threshold = config->stop_threshold;
+        printf("%s() %d->pcm->config.stop_threshold:%d\n", __FUNCTION__, __LINE__,
+	     	pcm->config.stop_threshold);
+    }
 
     if (!pcm->config.avail_min) {
         if (pcm->flags & PCM_MMAP)
@@ -1006,6 +1049,7 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
     while (pcm->boundary * 2 <= INT_MAX - pcm->buffer_size)
         pcm->boundary *= 2;
 
+    printf("%s() SNDRV_PCM_IOCTL_SW_PARAMS\n", __FUNCTION__);
     if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_SW_PARAMS, &sparams)) {
         oops(pcm, errno, "cannot set sw params");
         goto fail;
@@ -1020,6 +1064,7 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
 #ifdef SNDRV_PCM_IOCTL_TTSTAMP
     if (pcm->flags & PCM_MONOTONIC) {
         int arg = SNDRV_PCM_TSTAMP_TYPE_MONOTONIC;
+        printf("%s() %d->SNDRV_PCM_IOCTL_TTSTAMP\n", __FUNCTION__, __LINE__);
         rc = ioctl(pcm->fd, SNDRV_PCM_IOCTL_TTSTAMP, &arg);
         if (rc < 0) {
             oops(pcm, errno, "cannot set timestamp type");

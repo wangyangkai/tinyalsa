@@ -154,6 +154,21 @@ int main(int argc, char **argv)
             argv++;
     }
 
+    printf("filename:%s\n", filename);
+    printf("card:%d\n\
+device:%d\n\
+chunk_fmt.num_channels:%d\n\
+chunk_fmt.sample_rate:%d\n\
+chunk_fmt.bits_per_sample:%d\n\
+period_size:%d\n\
+period_count:%d\n\n", 
+        card,
+        device,
+        chunk_fmt.num_channels,
+        chunk_fmt.sample_rate,
+        chunk_fmt.bits_per_sample,
+        period_size, period_count);
+
     play_sample(file, card, device, chunk_fmt.num_channels, chunk_fmt.sample_rate,
                 chunk_fmt.bits_per_sample, period_size, period_count, chunk_header.sz);
 
@@ -219,6 +234,7 @@ void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned in
     char *buffer;
     unsigned int size, read_sz;
     int num_read;
+	int count;
 
     memset(&config, 0, sizeof(config));
     config.channels = channels;
@@ -260,10 +276,15 @@ void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned in
     /* catch ctrl-c to shutdown cleanly */
     signal(SIGINT, stream_close);
 
+    count = 0;
+    printf("%s() play start, frames_byte_size:%d, \n", __FUNCTION__, size);
+
     do {
         read_sz = size < data_sz ? size : data_sz;
         num_read = fread(buffer, 1, read_sz, file);
+		printf("%s() pcm_write num_read:%d\n", __FUNCTION__, num_read);
         if (num_read > 0) {
+			count++;
             if (pcm_write(pcm, buffer, num_read)) {
                 fprintf(stderr, "Error playing sample\n");
                 break;
@@ -271,6 +292,8 @@ void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned in
             data_sz -= num_read;
         }
     } while (!close && num_read > 0 && data_sz > 0);
+
+    printf("%s() play over, count:%d, \n", __FUNCTION__, count);
 
     free(buffer);
     pcm_close(pcm);
